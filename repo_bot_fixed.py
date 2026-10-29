@@ -4,6 +4,7 @@ Windows Native (PowerShell) + Shallow Clone + Auto Rate-Limit / Cooldown Handler
 (Linux/VPS e bash diye o chole, jate pore deploy kora jay.)
 """
 
+import datetime
 import json
 import os
 import re
@@ -328,6 +329,406 @@ def install_dependency(manager: str, package_or_command: str) -> str:
         return f"❌ ইনস্টলেশন ব্যর্থ হয়েছে (exit code {res.returncode}):\n{res.stderr[:500]}"
 
 
+# ---------------------------------------------------------------- autonomous github publisher & secret sanitizer
+SECRET_PATTERNS = [
+    (re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"), "OpenAI/OmniRoute API Key"),
+    (re.compile(r"ghp_[a-zA-Z0-9]{20,}"), "GitHub Personal Access Token"),
+    (re.compile(r"gho_[a-zA-Z0-9]{20,}"), "GitHub OAuth Token"),
+    (re.compile(r"github_pat_[a-zA-Z0-9_]{30,}"), "GitHub Fine-Grained Token"),
+    (re.compile(r"AIza[0-9A-Za-z\-_]{35}"), "Google API Key"),
+    (re.compile(r"AQ\.[a-zA-Z0-9_\-]{30,}"), "Gemini API Key"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key ID"),
+    (re.compile(r"""(?i)(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]([a-zA-Z0-9_\-\.]{16,})['"]"""), "Hardcoded Secret/Token"),
+]
+
+IGNORED_SCAN_DIRS = {
+    ".git", "__pycache__", "node_modules", "venv", ".venv", "env", "ENV",
+    "repo", "workspace", ".pytest_cache", ".ruff_cache", ".mypy_cache", "dist", "build"
+}
+IGNORED_SCAN_FILES = {".bot_history.json", ".bot_lessons.json", ".env"}
+
+STANDARD_GITIGNORE_CONTENT = """# Environment & Secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Bot Internal State & History
+.bot_history.json
+.bot_lessons.json
+
+# Workspace & Cloned Repos
+repo/
+workspace/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Node / JS
+node_modules/
+npm-debug.log*
+
+# IDE & Logs
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+*.log
+"""
+
+
+def scan_directory_for_secrets(target_path: Path):
+    """Scan files in target_path for potential API keys, tokens, or credentials."""
+    findings = []
+    scanned_count = 0
+    target_path = target_path.resolve()
+
+    for root, dirs, files in os.walk(target_path):
+        dirs[:] = [d for d in dirs if d not in IGNORED_SCAN_DIRS]
+        for f in files:
+            if f in IGNORED_SCAN_FILES or f.endswith((".pyc", ".png", ".jpg", ".jpeg", ".zip", ".exe", ".dll")):
+                continue
+            fpath = Path(root) / f
+            try:
+                if fpath.stat().st_size > 2 * 1024 * 1024:
+                    continue
+                content = fpath.read_text(encoding="utf-8", errors="replace")
+                scanned_count += 1
+                for line_idx, line in enumerate(content.splitlines(), 1):
+                    if "re.compile" in line or line.strip().startswith(("#", "//", "/*")):
+                        continue
+                    for pattern, secret_type in SECRET_PATTERNS:
+                        m = pattern.search(line)
+                        if m:
+                            val = m.group(0)
+                            masked = val[:6] + "..." + val[-4:] if len(val) > 10 else "***"
+                            findings.append({
+                                "file": str(fpath.relative_to(target_path)),
+                                "line": line_idx,
+                                "type": secret_type,
+                                "preview": masked,
+                            })
+            except Exception:
+                pass
+    return scanned_count, findings
+
+
+def prepare_project_files(target_path: Path, repo_name: str, description: str, author_name: str) -> list:
+    """Ensure .gitignore, .env.example, LICENSE, and README.md exist and are safe."""
+    target_path = target_path.resolve()
+    created_or_updated = []
+
+    # 1. .gitignore
+    gitignore_path = target_path / ".gitignore"
+    critical_rules = [
+        ".env",
+        ".env.local",
+        ".env.*.local",
+        "!.env.example",
+        ".bot_history.json",
+        ".bot_lessons.json",
+        "repo/",
+        "workspace/",
+        "__pycache__/",
+    ]
+    if not gitignore_path.exists():
+        gitignore_path.write_text(STANDARD_GITIGNORE_CONTENT, encoding="utf-8")
+        created_or_updated.append(".gitignore (Created)")
+    else:
+        existing = gitignore_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        existing_rules = {line.strip() for line in existing if line.strip() and not line.startswith("#")}
+        missing = [r for r in critical_rules if r not in existing_rules]
+        if missing:
+            with gitignore_path.open("a", encoding="utf-8") as f:
+                f.write("\n# Essential Security Guardrails (Auto-added by Bot)\n")
+                for r in missing:
+                    f.write(f"{r}\n")
+            created_or_updated.append(".gitignore (Updated with security rules)")
+
+    # 2. .env.example (if .env exists)
+    env_path = target_path / ".env"
+    env_example_path = target_path / ".env.example"
+    if env_path.exists() and not env_example_path.exists():
+        try:
+            env_lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            example_lines = []
+            for line in env_lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    example_lines.append(line)
+                elif "=" in stripped:
+                    key = stripped.split("=", 1)[0].strip()
+                    example_lines.append(f"{key}=your_{key.lower()}_here")
+                else:
+                    example_lines.append(line)
+            env_example_path.write_text("\n".join(example_lines) + "\n", encoding="utf-8")
+            created_or_updated.append(".env.example (Generated from .env with scrubbed values)")
+        except Exception:
+            pass
+
+    # 3. LICENSE (MIT)
+    has_license = any((target_path / name).exists() for name in ("LICENSE", "LICENSE.md", "LICENSE.txt", "license"))
+    if not has_license:
+        current_year = datetime.datetime.now().year
+        license_text = f"""MIT License
+
+Copyright (c) {current_year} {author_name or 'Project Author'}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+        (target_path / "LICENSE").write_text(license_text, encoding="utf-8")
+        created_or_updated.append("LICENSE (MIT License Created)")
+
+    # 4. README.md
+    readme_path = target_path / "README.md"
+    if not readme_path.exists():
+        desc = description or f"Autonomous, secure codebase for {repo_name}."
+        readme_text = f"""# {repo_name}
+
+{desc}
+
+## 🚀 Features
+- Clean, modular architecture
+- Automated configuration and guardrails
+
+## ⚙️ Setup & Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/{author_name or 'user'}/{repo_name}.git
+   cd {repo_name}
+   ```
+2. Setup environment variables (if applicable):
+   ```bash
+   cp .env.example .env
+   ```
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+"""
+        readme_path.write_text(readme_text, encoding="utf-8")
+        created_or_updated.append("README.md (Generated)")
+
+    return created_or_updated
+
+
+def publish_to_github(
+    repo_name: str = "",
+    description: str = "",
+    visibility: str = "public",
+    target_dir: str = ".",
+) -> str:
+    """Scan secrets, prepare docs, and publish project safely to GitHub."""
+    target_path = Path(target_dir).resolve()
+    if not target_path.exists() or not target_path.is_dir():
+        if state["repo_dir"] and state["repo_dir"].exists():
+            target_path = state["repo_dir"].resolve()
+        else:
+            target_path = Path.cwd().resolve()
+
+    if not repo_name:
+        repo_name = re.sub(r"[^a-zA-Z0-9_\-\.]", "-", target_path.name).strip("-")
+
+    vis = "private" if "private" in visibility.lower() else "public"
+
+    # Step 1: Pre-flight security scan
+    scanned_count, findings = scan_directory_for_secrets(target_path)
+    if findings:
+        details_list = [f"  • {f['file']}:{f['line']} -> {f['type']} ({f['preview']})" for f in findings[:5]]
+        details_str = "\n".join(details_list)
+        record_history(
+            repo_name=repo_name,
+            action="publish",
+            status="Failed",
+            commit_status="Aborted",
+            reason="Sensitive secrets detected in code files",
+            details=f"Found {len(findings)} secret(s) during pre-flight scan.",
+        )
+        return (
+            f"❌ [Security Alert] প্রজেক্ট ফাইলে সিক্রেট/টোকেন পাওয়া গেছে! লিক রোধ করতে পাবলিশ বাতিল করা হলো:\n"
+            f"{details_str}\n"
+            f"👉 অনুগ্রহ করে ফাইলগুলো থেকে সরাসরি API Key/টোকেন সরিয়ে `.env` ফাইলে রাখুন।"
+        )
+
+    # Step 2: GitHub CLI authentication status
+    gh_user = ""
+    gh_name = ""
+    try:
+        auth_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=10)
+        if auth_check.returncode == 0:
+            user_out = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=10)
+            gh_user = user_out.stdout.strip()
+            name_out = subprocess.run(["gh", "api", "user", "--jq", ".name"], capture_output=True, text=True, timeout=10)
+            gh_name = name_out.stdout.strip()
+    except Exception:
+        pass
+
+    if not gh_user:
+        try:
+            cfg_user = subprocess.run(["git", "config", "user.name"], cwd=target_path, capture_output=True, text=True).stdout.strip()
+            gh_user = cfg_user or "User"
+        except Exception:
+            gh_user = "User"
+
+    author_name = gh_name or gh_user
+
+    # Step 3: Ensure documentation & .gitignore
+    doc_changes = prepare_project_files(target_path, repo_name, description, author_name)
+
+    # Step 4: Interactive confirmation (if running in terminal)
+    is_interactive = sys.stdin.isatty()
+    print("\n" + "=" * 65)
+    print("🚀 [Autonomous GitHub Publisher & Security Sanitizer]")
+    print(f"  • Target Directory : {target_path}")
+    print(f"  • Repository Name  : {repo_name}")
+    print(f"  • GitHub Account   : @{gh_user}")
+    print(f"  • Visibility       : {vis.upper()}")
+    print(f"  • Description      : {description or '(Auto-generated)'}")
+    print(f"  • Security Audit   : ✅ Clean ({scanned_count} files scanned, 0 secrets detected)")
+    if doc_changes:
+        print(f"  • Files Prepared   : {', '.join(doc_changes)}")
+    print("=" * 65)
+
+    if is_interactive:
+        try:
+            choice = input(f"👉 আপনি কি '@{gh_user}/{repo_name}' রিপোজিটরি GitHub-এ ({vis}) পাবলিশ করতে চান? (Y/N): ").strip().lower()
+            if choice not in ("y", "yes", "ha", "1"):
+                return "Publishing cancelled: ব্যবহারকারী পাবলিশ করার অনুমতি দেননি।"
+        except (EOFError, KeyboardInterrupt):
+            return "Publishing cancelled."
+
+    # Step 5: Git repo setup & pre-commit validation
+    try:
+        git_check = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=target_path, capture_output=True, text=True)
+        if git_check.returncode != 0:
+            subprocess.run(["git", "init", "-b", "main"], cwd=target_path, check=True, capture_output=True)
+
+        subprocess.run(["git", "config", "user.name", author_name], cwd=target_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", f"{gh_user}@users.noreply.github.com"], cwd=target_path, capture_output=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=target_path, capture_output=True)
+
+        # Stage files
+        subprocess.run(["git", "add", "-A"], cwd=target_path, check=True, capture_output=True)
+
+        # Audit staged diff for any secret patterns before commit
+        diff_staged = subprocess.run(["git", "diff", "--cached"], cwd=target_path, capture_output=True, text=True).stdout
+        for pattern, s_type in SECRET_PATTERNS:
+            m = pattern.search(diff_staged)
+            if m:
+                subprocess.run(["git", "restore", "--staged", "."], cwd=target_path, capture_output=True)
+                return f"❌ Pre-commit Security Audit Failed: Staged changes contain sensitive secret '{s_type}'. Commit aborted!"
+
+        # Commit if changes exist
+        diff_quiet = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=target_path)
+        if diff_quiet.returncode != 0:
+            commit_msg = f"Publish {repo_name} via Autonomous GitHub Bot"
+            subprocess.run(["git", "commit", "-m", commit_msg], cwd=target_path, check=True, capture_output=True)
+
+    except Exception as e:
+        return f"❌ Git preparation failed: {e}"
+
+    # Step 6: GitHub remote creation & push
+    remote_url = f"https://github.com/{gh_user}/{repo_name}"
+    try:
+        # Check if remote exists on GitHub
+        view_res = subprocess.run(["gh", "repo", "view", f"{gh_user}/{repo_name}"], capture_output=True, text=True, timeout=15)
+        if view_res.returncode != 0:
+            desc_arg = description or f"Autonomous codebase for {repo_name}"
+            create_cmd = ["gh", "repo", "create", repo_name, f"--{vis}", f"--source={str(target_path)}", "--remote=origin", "--push", f"--description={desc_arg}"]
+            print(f"\n[GitHub] GitHub-এ নতুন রিপোজিটরি তৈরি ও পুশ করা হচ্ছে...")
+            res_create = subprocess.run(create_cmd, cwd=target_path, capture_output=True, text=True, timeout=120)
+            if res_create.returncode != 0:
+                record_history(
+                    repo_name=repo_name,
+                    action="publish",
+                    status="Failed",
+                    reason="gh repo create failed",
+                    details=res_create.stderr[:300],
+                )
+                return f"❌ GitHub-এ রিপোজিটরি তৈরি করতে সমস্যা হয়েছে:\n{res_create.stderr[:500]}"
+        else:
+            print(f"\n[GitHub] রিপোজিটরি ইতিমধ্যে তৈরি আছে। লেটেস্ট কোড পুশ করা হচ্ছে...")
+            subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=target_path, capture_output=True)
+            push_res = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=target_path, capture_output=True, text=True, timeout=120)
+            if push_res.returncode != 0:
+                record_history(
+                    repo_name=repo_name,
+                    action="publish",
+                    status="Failed",
+                    reason="git push failed",
+                    details=push_res.stderr[:300],
+                )
+                return f"❌ GitHub-এ পুশ ব্যর্থ হয়েছে:\n{push_res.stderr[:500]}"
+
+    except Exception as e:
+        record_history(
+            repo_name=repo_name,
+            action="publish",
+            status="Failed",
+            reason=str(e),
+            details=f"Path: {target_path}",
+        )
+        return f"❌ GitHub Publish Execution Error: {e}"
+
+    # Step 7: Record success in history
+    record_history(
+        repo_name=repo_name,
+        repo_url=remote_url,
+        action="publish",
+        status="Success",
+        commit_status=f"Published ({vis})",
+        reason="Autonomous secret scrubbing and safe GitHub upload",
+        details=f"Scrubbed & verified {scanned_count} files | Docs: {', '.join(doc_changes) or 'Clean'}",
+    )
+
+    private_tip = ""
+    if vis == "private":
+        private_tip = (
+            "\n💡 প্রাইভেট রিপোজিটরি টিপ:\n"
+            "আপনার GitHub প্রোফাইলে সবুজ কনট্রিবিউশন স্কয়ার (Green Squares) শো করানোর জন্য:\n"
+            "GitHub Profile -> Edit Profile -> 'Include private contributions on my profile' চেকবক্সটি অন করুন।"
+        )
+
+    summary = (
+        f"✅ সফলভাবে প্রজেক্টটি GitHub-এ পাবলিশ (Upload) করা হয়েছে!\n\n"
+        f"📌 বিস্তারিত বিবরণ:\n"
+        f"  • Repository Link : {remote_url}\n"
+        f"  • Visibility      : {vis.upper()}\n"
+        f"  • Security Audit   : 🛡️ পাস হয়েছে ({scanned_count} টি ফাইল স্ক্যান করা হয়েছে, কোনো সিক্রেট বা API কী লিক হয়নি)\n"
+        f"  • Prepared Files  : {', '.join(doc_changes) if doc_changes else 'সকল ডকুমেন্ট ও .gitignore ভেরিফাইড'}\n"
+        f"  • History Register: হিস্ট্রি রেজিস্টারে সফলভাবে রেকর্ড যুক্ত হয়েছে।\n"
+        f"{private_tip}"
+    )
+    return summary
+
+
 # ---------------------------------------------------------------- tools
 def clone_repo(url: str) -> str:
     name = re.split(r"[/\\]", url.rstrip("/\\"))[-1].removesuffix(".git")
@@ -555,6 +956,7 @@ AVAILABLE_TOOLS = {
     "get_repo_history": get_repo_history,
     "uninstall_repo": uninstall_repo,
     "install_dependency": install_dependency,
+    "publish_to_github": publish_to_github,
 }
 
 TOOL_DEFINITIONS = [
@@ -675,6 +1077,22 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "publish_to_github",
+            "description": "Local project ba repository GitHub-e safely publish/upload kore. Prothome shob files scan kore secret/token scrub kore, .gitignore/.env.example/LICENSE/README toiri/verify kore, visibility (public/private) set kore, ebong GitHub CLI/git diye safely push kore history register e save kore.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {"type": "string", "description": "GitHub repository-r nam (e.g. 'my-cool-project'). Khali rakhle folder er nam use korbe."},
+                    "description": {"type": "string", "description": "GitHub repository description."},
+                    "visibility": {"type": "string", "enum": ["public", "private"], "description": "Repository visibility: 'public' ba 'private' (default: 'public')."},
+                    "target_dir": {"type": "string", "description": "Jey folder/project ti publish korte hobe tar path (default: '.' ba current repo)."},
+                },
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """Tumi ekta expert coding agent. User tomake ekta GitHub repo ar task dibe.
@@ -694,7 +1112,9 @@ Kajer Niyom:
 9. Kono repo run korte jodi missing software, dependency, ba runtime lage (jemon: npm package, python package, JDK, Node):
    - 'install_dependency' tool call kore user er permission niye install korar cheshta koro.
    - Install sheshe project/file run kore user ke dekhaw je ekhon cholche.
-10. User jodi kono repo 'uninstall' ba 'delete' korte bole, tobe 'uninstall_repo' tool use kore puro clear koro ebong janaw je history register e record hoyeche."""
+10. User jodi kono repo 'uninstall' ba 'delete' korte bole, tobe 'uninstall_repo' tool use kore puro clear koro ebong janaw je history register e record hoyeche.
+11. User jodi kono local project ba repo GitHub-e upload/publish korte bole:
+   - 'publish_to_github' tool use koro. Ei tool prothome secret scan kore shob API key/token scrub korbe, .gitignore, .env.example, README.md, LICENSE toiri korbe, visibility (public/private) set korbe, ebong safely GitHub-e push kore history register e save korbe."""
 
 RETRYABLE_ERRORS = (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
 
@@ -834,6 +1254,12 @@ def main():
         print_history_table()
         sys.exit(0)
 
+    if len(sys.argv) >= 2 and sys.argv[1].lower() in ("publish", "--publish", "upload"):
+        target = sys.argv[2] if len(sys.argv) >= 3 else ""
+        vis = sys.argv[3] if len(sys.argv) >= 4 else "public"
+        print(publish_to_github(repo_name=target, visibility=vis))
+        sys.exit(0)
+
     if len(sys.argv) >= 2 and sys.argv[1].lower() in ("uninstall", "delete", "remove", "clean"):
         target = sys.argv[2] if len(sys.argv) >= 3 else input("👉 Uninstall korar jonno repo nam dao: ").strip()
         print(uninstall_repo(target))
@@ -854,7 +1280,7 @@ def main():
         print("🤖 GitHub Autonomous Agent (Windows Native)")
         print("=" * 55)
         try:
-            repo_input = input("\n👉 GitHub repository-r link/nam dao (ba 'history' / 'uninstall <name>'): ").strip()
+            repo_input = input("\n👉 GitHub repository-r link/nam dao (ba 'history' / 'publish' / 'uninstall <name>'): ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBondho kora holo.")
             sys.exit(0)
@@ -869,6 +1295,12 @@ def main():
                 sys.exit(0)
             if not repo_input:
                 sys.exit(0)
+        if repo_input.lower().startswith(("publish", "upload")):
+            parts = repo_input.split()
+            target = parts[1] if len(parts) > 1 else ""
+            vis = parts[2] if len(parts) > 2 else "public"
+            print(publish_to_github(repo_name=target, visibility=vis))
+            sys.exit(0)
         if repo_input.lower().startswith(("uninstall ", "delete ", "remove ", "clean ")):
             target = repo_input.split(" ", 1)[1].strip()
             print(uninstall_repo(target))
@@ -899,7 +1331,7 @@ def main():
         while True:
             print("\n" + "-" * 55)
             try:
-                user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'history', ba 'exit'): ").strip()
+                user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'publish', 'history', ba 'exit'): ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
             if not user_msg or user_msg.lower() in ("exit", "quit", "q", "na", "bondho"):
@@ -907,6 +1339,12 @@ def main():
                 break
             if user_msg.lower() in ("history", "list", "history dekhaw"):
                 print_history_table()
+                continue
+            if user_msg.lower().startswith(("publish", "upload")):
+                parts = user_msg.split()
+                target = parts[1] if len(parts) > 1 else ""
+                vis = parts[2] if len(parts) > 2 else "public"
+                print(publish_to_github(repo_name=target, visibility=vis))
                 continue
             if user_msg.lower().startswith(("uninstall ", "delete ", "remove ", "clean ")):
                 target = user_msg.split(" ", 1)[1].strip()

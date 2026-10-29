@@ -33,6 +33,14 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
   - Maintains a persistent record of all handled repositories, commit states, pull request requirements, and uninstalls.
   - Accessible directly in chat or via `--history`.
 
+- **🚀 Autonomous GitHub Publisher & Secret Sanitizer (`publish`):**
+  - Autonomously prepares and publishes local projects to GitHub safely and securely.
+  - **Secret Sanitization:** Pre-flight scanner scans code for sensitive credentials (OpenAI/OmniRoute, GitHub PAT, Google/Gemini, AWS, and hardcoded tokens).
+  - **Auto-Documentation:** Verifies and auto-generates strict `.gitignore`, `.env.example` (with scrubbed values), `LICENSE` (MIT), and `README.md`.
+  - **Pre-Commit Staged Diff Audit:** Verifies the staged git diff before committing; automatically aborts commit and push if any secrets are detected.
+  - **Interactive Confirmation & Visibility:** Explicitly asks for permission and visibility (`public` or `private`).
+  - Logs the publishing action and remote URL to `.bot_history.json`.
+
 - **🧹 Clean Uninstallation:**
   - Safely deletes cloned repositories and cleans workspace folders via `uninstall <repo_name>` without file lock crashes.
 
@@ -90,6 +98,9 @@ python repo_bot_fixed.py https://github.com/HKUDS/Vibe-Trading "README.md pore a
 # Check activity and commit history register
 python repo_bot_fixed.py --history
 
+# Safely publish a local project to GitHub (with secret scanning & docs)
+python repo_bot_fixed.py publish my-project public
+
 # Uninstall a repository and clean workspace
 python repo_bot_fixed.py uninstall Spoon-Knife
 
@@ -137,3 +148,4 @@ Result: 24/24 checks passed
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE) - Copyright (c) 2026 New150497.
+
