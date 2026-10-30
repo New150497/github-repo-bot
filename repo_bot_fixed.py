@@ -1499,15 +1499,32 @@ def get_available_repos() -> list:
     return list(repos.values())
 
 
+def print_dropdown_list(active_repos: list):
+    """Print formatted list of all available repository terminals."""
+    print("\n" + "=" * 67)
+    print("📁 Managed Repository Terminals (Dropdown List):")
+    print("=" * 67)
+    if active_repos:
+        for idx, r in enumerate(active_repos, 1):
+            launcher_str = f"-> {r['launcher']}" if r.get("launcher") else ""
+            print(f"  [{idx}] 📦 {r['name']:<22} {launcher_str}")
+    else:
+        print("  (কোনো রিপোজিটরি ফোল্ডার পাওয়া যায়নি)")
+    print("-" * 67)
+
+
 def run_central_hub() -> tuple[str, str]:
     """Display the Central Repository Hub menu and return selected (repo_input, task)."""
     sync_all_launchers()
     net_ok = check_internet()
     ensure_omniroute_running()
     omni_ok = is_omniroute_running()
+    show_dropdown = False
 
     while True:
         repos = get_available_repos()
+        active_repos = [r for r in repos if r["exists"]]
+
         print("\n" + "=" * 67)
         print("🤖 GitHub Autonomous Agent - Central Repository Hub")
         print("=" * 67)
@@ -1517,16 +1534,15 @@ def run_central_hub() -> tuple[str, str]:
         print(f"[OmniRoute] {omni_str}")
         print("-" * 67)
 
-        active_repos = [r for r in repos if r["exists"]]
-        if active_repos:
-            print("📁 Managed Repository Terminals (Dropdown List):")
-            for idx, r in enumerate(active_repos, 1):
-                launcher_str = f"-> {r['launcher']}" if r.get("launcher") else ""
-                print(f"  [{idx}] 📦 {r['name']:<20} {launcher_str}")
+        if show_dropdown:
+            print_dropdown_list(active_repos)
+            show_dropdown = False
         else:
-            print("📁 No repositories in workspace yet.")
+            repo_count_str = f"{len(active_repos)} টি রিপোজিটরি সংরক্ষিত আছে" if active_repos else "কোনো রিপোজিটরি এখনো নেই"
+            print(f"📁 Repositories: {repo_count_str} (তালিকা দেখতে 'dropdown' বা 'D' লিখুন)")
 
         print("\n⚙️ Actions & Management:")
+        print("  [D] 📁 Show Dropdown List (সব রিপোজিটরির তালিকা দেখুন)")
         print("  [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)")
         print("  [P] 🚀 Publish Local Project to GitHub (with secret scanning & docs)")
         print("  [K] 🔑 Setup / Update Gemini API Key (Google AI Studio)")
@@ -1536,7 +1552,7 @@ def run_central_hub() -> tuple[str, str]:
         print("=" * 67)
 
         try:
-            choice = input("👉 অপশন নম্বর (1-N), অ্যাকশন (N/P/K/H/U/Q), বা Repo নাম/URL দিন: ").strip()
+            choice = input("👉 অপশন নম্বর (1-N), অ্যাকশন (D/N/P/K/H/U/Q), বা Repo নাম/URL দিন: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nধন্যবাদ! বট বন্ধ করা হলো।")
             sys.exit(0)
@@ -1549,7 +1565,11 @@ def run_central_hub() -> tuple[str, str]:
             print("ধন্যবাদ! বট বন্ধ করা হলো।")
             sys.exit(0)
 
-        if c_lower in ("h", "history", "list"):
+        if c_lower in ("d", "dropdown", "list", "repos", "show"):
+            show_dropdown = True
+            continue
+
+        if c_lower in ("h", "history"):
             print_history_table()
             input("👉 মেনুতে ফিরে যেতে Enter চাপুন...")
             continue
@@ -1587,7 +1607,7 @@ def run_central_hub() -> tuple[str, str]:
                 print(f"\n[Selected] 🚀 {selected['name']} এর ডেডিকেটেড টার্মিনালে প্রবেশ করা হচ্ছে...")
                 return selected["name"], DEFAULT_TASK
             else:
-                print(f"❌ ভুল নম্বর: ১ থেকে {len(active_repos)}-এর মধ্যে নির্বাচন করুন।")
+                print(f"❌ ভুল নম্বর: ১ থেকে {len(active_repos)}-এর মধ্যে নির্বাচন করুন। তালিকা দেখতে 'dropdown' লিখুন।")
                 continue
 
         # Check if typed existing repo name directly
@@ -1672,7 +1692,7 @@ def main():
             while True:
                 print("\n" + "-" * 55)
                 try:
-                    user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'hub', 'publish', 'history', ba 'exit'): ").strip()
+                    user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'hub', 'dropdown', 'publish', 'history', ba 'exit'): ").strip()
                 except (EOFError, KeyboardInterrupt):
                     break
                 if not user_msg or user_msg.lower() in ("exit", "quit", "q", "na", "bondho"):
@@ -1680,6 +1700,11 @@ def main():
                     break
                 if user_msg.lower() in ("hub", "menu", "back"):
                     break
+                if user_msg.lower() in ("dropdown", "repos", "repos dekhaw"):
+                    repos = get_available_repos()
+                    active = [r for r in repos if r["exists"]]
+                    print_dropdown_list(active)
+                    continue
                 if user_msg.lower() in ("history", "list", "history dekhaw"):
                     print_history_table()
                     continue
