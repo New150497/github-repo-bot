@@ -62,6 +62,13 @@
    - **Central Repository Hub (`run_central_hub`):**
      `run_bot.bat` বা আর্গুমেন্ট ছাড়া বট চালু করলে একটি ড্রপডাউন/মেনু ওপেন হয় যেখান থেকে ১, ২, ৩ নম্বর চেপে যে কোনো রিপোজিটরির টার্মিনালে ঢোকা যায়, নতুন রিপো যোগ করা যায় বা কি আপডেট করা যায়।
 
+7. `Telegram Remote Controller (`telegram_remote.py`, `run_telegram_bot.bat`)`:
+   - **Mobile/Remote Operation:** বিশ্বের যেকোনো প্রান্ত থেকে টেলিগ্রাম অ্যাপের মাধ্যমে পিসির এজেন্টকে সম্পূর্ণ নিয়ন্ত্রণ করা যায়।
+   - **Single-Owner Security Pairing (`TELEGRAM_ALLOWED_USER_ID`):** প্রথমবার `/start` কমান্ড দেওয়ার পর ইউজারের টেলিগ্রাম আইডির সাথে পার্মানেন্টলি পেয়ার হয়ে যায়। অন্য কেউ কমান্ড দিলে এক্সেস ব্লক করা হয়।
+   - **Interactive Inline Buttons & Dashboard:** রিপোজিটরি পরিবর্তন, ক্লোন, পাবলিশ, স্ট্যাটাস চেক এবং হিস্ট্রি দেখার জন্য ইনলাইন বাটন ইন্টারফেস।
+   - **Permission Interceptor (`telegram_permission_handler`):** ডিপেন্ডেন্সি ইনস্টল বা গিটহাবে পুশ করার আগে টেলিগ্রাম চ্যাটে `[✅ Approve] / [❌ Reject]` বাটন পাঠায় এবং ইউজারের ক্লিকের অপেক্ষায় থাকে।
+   - **Real-Time Step Updates:** টাস্ক চলাকালীন প্রতিটি টুলের অগ্রগতি লাইভ মেসেজে আপডেট করে এবং সমাপ্তিতে বিস্তারিত সামারি প্রদান করে।
+
 ## 4. Current State & Verification
 - Status:
   - `repo_bot_fixed.py` is fully verified with Self-Improvement, History Tracking, Permission-based Software Installer, Uninstall, Autonomous GitHub Publisher, Dedicated Repo Launchers, and Central Hub.

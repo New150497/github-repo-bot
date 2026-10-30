@@ -58,6 +58,13 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
   - **Interactive Confirmation & Visibility:** Explicitly asks for permission and visibility (`public` or `private`).
   - Logs the publishing action and remote URL to `.bot_history.json`.
 
+- **📱 Telegram Remote Controller (`run_telegram_bot.bat` / `--telegram`):**
+  - Control your autonomous agent remotely from your mobile phone or any Telegram client anywhere in the world.
+  - **Single-Owner Security Guard:** Auto-pairs with the host owner's Telegram account (`TELEGRAM_ALLOWED_USER_ID`) to guarantee strict single-tenant authorization.
+  - **Interactive Inline Buttons:** Switch active repositories, trigger clones, inspect telemetry, and view activity history with 1-tap buttons.
+  - **Interactive Permission Approvals:** When the agent needs to install packages (`pip`, `npm`, `winget`) or push to GitHub, it sends interactive `[✅ Approve] / [❌ Reject]` inline buttons to your phone.
+  - **Live Step Updates:** Streams agent tool execution steps and delivers structured final answers directly to your Telegram chat.
+
 - **🧹 Clean Uninstallation:**
   - Safely deletes cloned repositories and cleans workspace folders via `uninstall <repo_name>` without file lock crashes.
 
@@ -144,7 +151,19 @@ python repo_bot_fixed.py uninstall Spoon-Knife
 
 # Run the 24-check verification backtest
 python repo_bot_fixed.py --self-test
+
+# Start the Telegram Remote Controller
+python repo_bot_fixed.py --telegram
 ```
+
+### Option 4: Telegram Remote Controller (Control from Phone)
+1. Double-click `run_telegram_bot.bat` (or select `[T]` in `run_bot.bat`).
+2. Follow the 1-minute prompt to enter your free Bot Token from `@BotFather`.
+3. Open Telegram and send `/start` to your bot.
+4. The bot pairs with your Telegram account and presents the interactive dashboard!
+   - Send any task prompt (e.g., *"check calculator.py and add power calculation"*)
+   - Switch repos with 1-tap buttons (`/repos`)
+   - Approve dependency installations or GitHub publishing directly from your phone!
 
 ---
 

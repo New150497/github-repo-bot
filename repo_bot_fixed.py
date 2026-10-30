@@ -265,13 +265,28 @@ BLOCKED = [
     r"\breg(\.exe)?\s+(add|delete)\b",
 ]
 
-SECRET_ENV_KEYS = {"GITHUB_TOKEN", "OMNIROUTE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"}
+SECRET_ENV_KEYS = {"GITHUB_TOKEN", "OMNIROUTE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"}
 
 state = {
     "repo_dir": None,
     "last_failed_command": None,
     "fail_count": 0,
 }
+
+PERMISSION_CALLBACK = None
+
+
+def set_active_repo(repo_name_or_path: str) -> bool:
+    """Set the active repository in state."""
+    p = Path(repo_name_or_path)
+    if not p.is_absolute():
+        p = WORKSPACE / repo_name_or_path
+    if p.exists() and p.is_dir():
+        state["repo_dir"] = p.resolve()
+        state["last_failed_command"] = None
+        state["fail_count"] = 0
+        return True
+    return False
 
 
 def _safe_env() -> dict:
@@ -496,8 +511,11 @@ def install_dependency(manager: str, package_or_command: str) -> str:
     print(f"  • Command: {cmd}")
     print("=" * 65)
 
+    global PERMISSION_CALLBACK
     approved = False
-    if is_interactive:
+    if callable(PERMISSION_CALLBACK):
+        approved = PERMISSION_CALLBACK("install_dependency", {"manager": mgr, "package": pkg, "command": cmd})
+    elif is_interactive:
         try:
             choice = input("👉 আপনি কি এটি ইনস্টল করার অনুমতি দিচ্ছেন? (Y/N): ").strip().lower()
             approved = choice in ("y", "yes", "ha", "1")
@@ -560,6 +578,7 @@ SECRET_PATTERNS = [
     (re.compile(r"github_pat_[a-zA-Z0-9_]{30,}"), "GitHub Fine-Grained Token"),
     (re.compile(r"AIza[0-9A-Za-z\-_]{35}"), "Google API Key"),
     (re.compile(r"AQ\.[a-zA-Z0-9_\-]{30,}"), "Gemini API Key"),
+    (re.compile(r"\b[0-9]{8,10}:[a-zA-Z0-9_\-]{35}\b"), "Telegram Bot Token"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key ID"),
     (re.compile(r"""(?i)(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]([a-zA-Z0-9_\-\.]{16,})['"]"""), "Hardcoded Secret/Token"),
 ]
@@ -931,7 +950,12 @@ def publish_to_github(
         print(f"  • Files Prepared   : {', '.join(doc_changes)}")
     print("=" * 65)
 
-    if is_interactive:
+    global PERMISSION_CALLBACK
+    if callable(PERMISSION_CALLBACK):
+        approved = PERMISSION_CALLBACK("publish_to_github", {"repo_name": repo_name, "gh_user": gh_user, "visibility": vis})
+        if not approved:
+            return "Publishing cancelled: ব্যবহারকারী পাবলিশ করার অনুমতি দেননি।"
+    elif is_interactive:
         try:
             choice = input(f"👉 আপনি কি '@{gh_user}/{repo_name}' রিপোজিটরি GitHub-এ ({vis}) পাবলিশ করতে চান? (Y/N): ").strip().lower()
             if choice not in ("y", "yes", "ha", "1"):
@@ -1532,7 +1556,7 @@ DEFAULT_TASK = (
 )
 
 
-def run_agent_turn(client, messages, max_steps=None):
+def run_agent_turn(client, messages, max_steps=None, step_callback=None):
     steps_limit = max_steps if max_steps is not None else MAX_STEPS
     for step in range(steps_limit):
         time.sleep(1.5)
@@ -1543,15 +1567,24 @@ def run_agent_turn(client, messages, max_steps=None):
 
         if not msg.tool_calls:
             print("\n===== Final Answer =====")
-            print(msg.content or "(Gemini kono text dey ni, upore [tool] log dekho)")
+            ans = msg.content or "(Gemini kono text dey ni, upore [tool] log dekho)"
+            print(ans)
             learned = reflect_and_learn(messages)
             if learned:
                 print(f"[Self-Improvement] Autonomous reflection: {len(learned)} new lesson(s) saved to memory.")
-            return
+            if callable(step_callback):
+                step_callback("final_answer", {"content": ans})
+            return ans
 
         for tool_call in msg.tool_calls:
+            fn_name = getattr(tool_call.function, "name", "")
+            fn_args = getattr(tool_call.function, "arguments", "")
+            if callable(step_callback):
+                step_callback("tool_start", {"name": fn_name, "arguments": fn_args})
             result = run_tool_call(tool_call)
             print(f"       -> {result[:150]}...")
+            if callable(step_callback):
+                step_callback("tool_end", {"name": fn_name, "result": result})
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -1559,6 +1592,9 @@ def run_agent_turn(client, messages, max_steps=None):
             })
 
     print("Max steps exceeded.")
+    if callable(step_callback):
+        step_callback("max_steps", {"message": "Max steps exceeded."})
+        return "Max steps exceeded."
     sys.exit(2)
 
 
@@ -1638,6 +1674,7 @@ def run_central_hub() -> tuple[str, str]:
         print("  [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)")
         print("  [P] 🚀 Publish Local Project to GitHub (with secret scanning & docs)")
         print("  [K] 🔑 Setup / Update AI Engine Credentials")
+        print("  [T] 📱 Start Telegram Remote Bot (Control from Phone)")
         print("  [H] 📜 View Full Activity & Commit History")
         print("  [U] 🧹 Uninstall a Repository")
         print("  [Q] ❌ Exit")
@@ -1659,6 +1696,15 @@ def run_central_hub() -> tuple[str, str]:
 
         if c_lower in ("d", "dropdown", "list", "repos", "show"):
             show_dropdown = True
+            continue
+
+        if c_lower in ("t", "telegram", "remote"):
+            try:
+                import telegram_remote
+                telegram_remote.start_telegram_bot()
+            except Exception as e:
+                print(f"❌ Telegram Bot চালু করতে ত্রুটি: {e}")
+                input("👉 মেনুতে ফিরে যেতে Enter চাপুন...")
             continue
 
         if c_lower in ("h", "history"):
@@ -1712,6 +1758,14 @@ def run_central_hub() -> tuple[str, str]:
 
 
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1].lower() in ("--telegram", "-tg", "telegram"):
+        try:
+            import telegram_remote
+            telegram_remote.start_telegram_bot()
+        except Exception as e:
+            print(f"❌ Telegram Bot Error: {e}")
+        sys.exit(0)
+
     if len(sys.argv) == 2 and sys.argv[1] in ("--self-test", "-t"):
         print("Running self-test suite (backtest_repo_bot.py)...")
         test_file = Path(__file__).resolve().parent / "backtest_repo_bot.py"
