@@ -52,11 +52,11 @@
    - **GitHub CLI Integration:** `gh repo create` অথবা `git push` এর মাধ্যমে সরাসরি ইউজারের GitHub অ্যাকাউন্টে পাবলিক বা প্রাইভেট রিপোজিটরি হিসেবে আপলোড করে এবং হিস্ট্রি রেজিস্টারে রেকর্ড যুক্ত করে।
    - **Interactive & Autonomous Access:** CLI (`publish`), চ্যাট ইন্টারফেস, অথবা এলএলএম টুলের মাধ্যমে ব্যবহার করা যায়।
 
-6. `OmniRoute Auto-Start, Google AI Studio Key Manager & Repository Hub Launchers`:
-   - **Internet & OmniRoute Auto-Start (`check_internet`, `ensure_omniroute_running`):**
-     বট চালু হওয়ার সময় নেটওয়ার্ক কানেকশন টেস্ট করে এবং OmniRoute লোকাল গেটওয়ে চালু না থাকলে ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে চালু করে রেডি করে নেয়।
-   - **Google AI Studio / Gemini Key Manager (`prompt_user_for_gemini_key`, `update_gemini_api_key`):**
-     টোকেন/কোটা শেষ হলে ইউজারকে সরাসরি Google AI Studio থেকে ফ্রি API Key নেওয়ার পরিষ্কার গাইডেন্স দেয় এবং পেস্ট করা মাত্রই `.env` ও OmniRoute SQLite ডেটাবেসে আপডেট করে লাইভ কানেকশন টেস্ট করে।
+6. `AI Gateway Auto-Start, Engine Key Manager & Repository Hub Launchers`:
+   - **Internet & Gateway Auto-Start (`check_internet`, `ensure_omniroute_running`):**
+     বট চালু হওয়ার সময় নেটওয়ার্ক কানেকশন টেস্ট করে এবং লোকাল গেটওয়ে চালু না থাকলে ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে চালু করে রেডি করে নেয়।
+   - **AI Engine Key Manager (`prompt_user_for_gemini_key`, `update_gemini_api_key`):**
+     টোকেন বা কি কনফিগার করার পরিষ্কার গাইডেন্স দেয় এবং পেস্ট করা মাত্রই `.env` ও গেটওয়ে ডেটাবেসে আপডেট করে লাইভ কানেকশন টেস্ট করে।
    - **Dedicated Repository Terminals (`launchers/run_<RepoName>.bat`):**
      প্রতিটি ক্লোন করা রিপোজিটরির জন্য আলাদা আলাদা ডেডিকেটেড ১-ক্লিক টার্মিনাল লঞ্চার তৈরি করে যা দিয়ে শুধু ওই রিপোজিটরির এজেন্টের সাথে কাজ করা যায়। হিস্ট্রি রেজিস্টারে লঞ্চার পাথ স্বয়ংক্রিয়ভাবে সেভ হয়।
    - **Central Repository Hub (`run_central_hub`):**

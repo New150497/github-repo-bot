@@ -215,16 +215,16 @@ def update_gemini_api_key(new_key: str) -> tuple[bool, str]:
 
 
 def prompt_user_for_gemini_key():
-    """Interactive prompt guiding user to Google AI Studio for free Gemini API Key."""
+    """Interactive prompt guiding user to configure or refresh AI Engine credentials."""
     print("\n" + "=" * 65)
-    print("🔑 [Google AI Studio / Gemini API Key Setup]")
+    print("🔑 [AI Engine Credentials Setup]")
     print("=" * 65)
-    print("Google AI Studio (Google AI Lab) থেকে একদম ফ্রিতে নতুন API Key নিতে পারেন:")
-    print("  👉 1. ব্রাউজারে এই লিংকে যান: https://aistudio.google.com/app/apikey")
-    print("  👉 2. 'Create API key' বাটনে ক্লিক করে Key কপি করুন (সাধারণত 'AIzaSy...' বা 'AQ...' দিয়ে শুরু হয়)।")
+    print("আপনার AI Engine প্রোভাইডার কনসোল থেকে API Key সেট করতে পারেন:")
+    print("  👉 1. আপনার অনুমোদিত প্রোভাইডার কনসোল থেকে API Key কপি করুন।")
+    print("  👉 2. Key পেস্ট করে Enter প্রেস করুন।")
     print("=" * 65)
     try:
-        new_key = input("👉 আপনার Gemini API Key এখানে পেস্ট করুন (বা 'cancel' লিখুন): ").strip()
+        new_key = input("👉 আপনার API Key এখানে পেস্ট করুন (বা 'cancel' লিখুন): ").strip()
     except (EOFError, KeyboardInterrupt):
         return
     if not new_key or new_key.lower() in ("cancel", "q", "exit"):
@@ -648,10 +648,82 @@ def scan_directory_for_secrets(target_path: Path):
     return scanned_count, findings
 
 
+def sanitize_public_metadata(text: str) -> str:
+    """Scrub any token sources, API key providers, secret sources, or credential links from public text."""
+    if not text:
+        return ""
+    # Strip URLs that point to API key, token, or auth generation portals
+    text = re.sub(r"https?://\S*(?:apikey|token|auth|credential|secret|aistudio)\S*", "", text, flags=re.IGNORECASE)
+    # Scrub specific provider / token source names
+    patterns = [
+        (r"(?i)\bgoogle\s*ai\s*studio\b", "AI Engine"),
+        (r"(?i)\baistudio\.google\.com\S*", ""),
+        (r"(?i)\bomniroute\b", "AI Gateway"),
+        (r"(?i)\bgemini[\-_]api[\-_]key\b", "API_KEY"),
+        (r"(?i)\bopenai[\-_]api[\-_]key\b", "API_KEY"),
+        (r"(?i)\bgithub[\-_]token\b", "ACCESS_TOKEN"),
+        (r"(?i)\bapi[\-_]?key\s+source\b", "Engine"),
+        (r"(?i)\btoken\s+source\b", "Authentication"),
+    ]
+    for pat, repl in patterns:
+        text = re.sub(pat, repl, text)
+    # Remove excessive spaces
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    return text
+
+
+def check_images_for_secrets(target_path: Path) -> list:
+    """Verify that image filenames and markdown image references don't leak token or API key sources."""
+    findings = []
+    target_path = target_path.resolve()
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+    suspicious_terms = ["token", "apikey", "api_key", "secret", "credential", "password", "aistudio", "omniroute", "gemini_key", "openai_key"]
+
+    for root, dirs, files in os.walk(target_path):
+        dirs[:] = [d for d in dirs if d not in IGNORED_SCAN_DIRS]
+        for f in files:
+            f_lower = f.lower()
+            fpath = Path(root) / f
+            # 1. Check image filenames
+            if any(f_lower.endswith(ext) for ext in image_exts):
+                for term in suspicious_terms:
+                    if term in f_lower:
+                        rel = str(fpath.relative_to(target_path))
+                        findings.append(f"Image filename '{rel}' contains sensitive term '{term}'")
+                        break
+            # 2. Check markdown and HTML files for image references with suspicious alt text or source URLs
+            elif f_lower.endswith((".md", ".markdown", ".html")):
+                try:
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                    # Match ![alt](url)
+                    md_imgs = re.findall(r"!\[(.*?)\]\((.*?)\)", content)
+                    for alt, src in md_imgs:
+                        combo = f"{alt} {src}".lower()
+                        for term in suspicious_terms:
+                            if term in combo:
+                                rel = str(fpath.relative_to(target_path))
+                                findings.append(f"Image reference in '{rel}' exposes '{term}': ![{alt}]({src})")
+                                break
+                    # Match <img ...>
+                    html_imgs = re.findall(r"<img[^>]+(?:src|alt)=[\"']([^\"']+)[\"'][^>]*>", content, re.IGNORECASE)
+                    for attr_val in html_imgs:
+                        attr_lower = attr_val.lower()
+                        for term in suspicious_terms:
+                            if term in attr_lower:
+                                rel = str(fpath.relative_to(target_path))
+                                findings.append(f"HTML img tag in '{rel}' exposes '{term}': {attr_val}")
+                                break
+                except Exception:
+                    pass
+
+    return findings
+
+
 def prepare_project_files(target_path: Path, repo_name: str, description: str, author_name: str) -> list:
     """Ensure .gitignore, .env.example, LICENSE, and README.md exist and are safe."""
     target_path = target_path.resolve()
     created_or_updated = []
+    clean_desc = sanitize_public_metadata(description)
 
     # 1. .gitignore
     gitignore_path = target_path / ".gitignore"
@@ -733,7 +805,7 @@ SOFTWARE.
     # 4. README.md
     readme_path = target_path / "README.md"
     if not readme_path.exists():
-        desc = description or f"Autonomous, secure codebase for {repo_name}."
+        desc = clean_desc or f"Autonomous, secure codebase for {repo_name}."
         readme_text = f"""# {repo_name}
 
 {desc}
@@ -780,6 +852,7 @@ def publish_to_github(
         repo_name = re.sub(r"[^a-zA-Z0-9_\-\.]", "-", target_path.name).strip("-")
 
     vis = "private" if "private" in visibility.lower() else "public"
+    clean_desc = sanitize_public_metadata(description)
 
     # Step 1: Pre-flight security scan
     scanned_count, findings = scan_directory_for_secrets(target_path)
@@ -798,6 +871,24 @@ def publish_to_github(
             f"❌ [Security Alert] প্রজেক্ট ফাইলে সিক্রেট/টোকেন পাওয়া গেছে! লিক রোধ করতে পাবলিশ বাতিল করা হলো:\n"
             f"{details_str}\n"
             f"👉 অনুগ্রহ করে ফাইলগুলো থেকে সরাসরি API Key/টোকেন সরিয়ে `.env` ফাইলে রাখুন।"
+        )
+
+    # Step 1b: Image and documentation token-source audit
+    img_findings = check_images_for_secrets(target_path)
+    if img_findings:
+        details_str = "\n".join(f"  • {item}" for item in img_findings[:5])
+        record_history(
+            repo_name=repo_name,
+            action="publish",
+            status="Failed",
+            commit_status="Aborted",
+            reason="Sensitive token or API key source detected in image assets or references",
+            details=f"Found {len(img_findings)} image secret issue(s).",
+        )
+        return (
+            f"❌ [Security Alert] ইমেজ বা ইমেজ রেফারেন্সে টোকেন/API Key সোর্স পাওয়া গেছে! লিক রোধ করতে পাবলিশ বাতিল করা হলো:\n"
+            f"{details_str}\n"
+            f"👉 কোনো স্ক্রিনশট বা ইমেজ ফাইলে API Key/টোকেন সোর্স রাখা যাবে না।"
         )
 
     # Step 2: GitHub CLI authentication status
@@ -823,7 +914,7 @@ def publish_to_github(
     author_name = gh_name or gh_user
 
     # Step 3: Ensure documentation & .gitignore
-    doc_changes = prepare_project_files(target_path, repo_name, description, author_name)
+    doc_changes = prepare_project_files(target_path, repo_name, clean_desc, author_name)
 
     # Step 4: Interactive confirmation (if running in terminal)
     is_interactive = sys.stdin.isatty()
@@ -833,8 +924,9 @@ def publish_to_github(
     print(f"  • Repository Name  : {repo_name}")
     print(f"  • GitHub Account   : @{gh_user}")
     print(f"  • Visibility       : {vis.upper()}")
-    print(f"  • Description      : {description or '(Auto-generated)'}")
-    print(f"  • Security Audit   : ✅ Clean ({scanned_count} files scanned, 0 secrets detected)")
+    print(f"  • Description      : {clean_desc or '(Auto-generated)'}")
+    print(f"  • Security Audit   : ✅ Clean ({scanned_count} files scanned, 0 secrets, 0 image leaks)")
+    print(f"  • Source Shield    : ✅ Verified (Zero token or API key sources exposed)")
     if doc_changes:
         print(f"  • Files Prepared   : {', '.join(doc_changes)}")
     print("=" * 65)
@@ -883,7 +975,7 @@ def publish_to_github(
         # Check if remote exists on GitHub
         view_res = subprocess.run(["gh", "repo", "view", f"{gh_user}/{repo_name}"], capture_output=True, text=True, timeout=15)
         if view_res.returncode != 0:
-            desc_arg = description or f"Autonomous codebase for {repo_name}"
+            desc_arg = clean_desc or f"Autonomous codebase for {repo_name}"
             create_cmd = ["gh", "repo", "create", repo_name, f"--{vis}", f"--source={str(target_path)}", "--remote=origin", "--push", f"--description={desc_arg}"]
             print(f"\n[GitHub] GitHub-এ নতুন রিপোজিটরি তৈরি ও পুশ করা হচ্ছে...")
             res_create = subprocess.run(create_cmd, cwd=target_path, capture_output=True, text=True, timeout=120)
@@ -1545,7 +1637,7 @@ def run_central_hub() -> tuple[str, str]:
         print("  [D] 📁 Show Dropdown List (সব রিপোজিটরির তালিকা দেখুন)")
         print("  [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)")
         print("  [P] 🚀 Publish Local Project to GitHub (with secret scanning & docs)")
-        print("  [K] 🔑 Setup / Update Gemini API Key (Google AI Studio)")
+        print("  [K] 🔑 Setup / Update AI Engine Credentials")
         print("  [H] 📜 View Full Activity & Commit History")
         print("  [U] 🧹 Uninstall a Repository")
         print("  [Q] ❌ Exit")

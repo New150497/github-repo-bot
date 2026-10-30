@@ -17,7 +17,7 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
 - **🛡️ Enterprise-Grade Security & Guardrails:**
   - **Command Blacklist:** Destructive operations (`rm -rf`, `git push`, PowerShell `Remove-Item -Recurse -Force`, `Format-Volume`, registry edits) are blocked instantly.
   - **Path Traversal Protection:** Restricts file reading and writing strictly within the cloned repo directory (`_safe_path`).
-  - **Secret Shielding:** Sanitizes child process environments (`_safe_env`) to ensure credentials (`GITHUB_TOKEN`, `GEMINI_API_KEY`, etc.) are never leaked.
+  - **Secret Shielding:** Sanitizes child process environments (`_safe_env`) to ensure credentials (tokens, API keys, etc.) are never leaked.
   - **Anti-Loop Breaker:** Detects repeating command failures and halts stuck loops.
   - **Process Tree Cleanup:** Orphan child processes are cleanly killed on timeout via `taskkill /T /F` or `killpg`.
 
@@ -34,13 +34,13 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
   - Automatically records and shows the dedicated terminal launcher path for each repository.
   - Accessible directly in chat or via `--history`.
 
-- **🌐 OmniRoute Gateway Self-Healing & Background Auto-Starter:**
+- **🌐 AI Gateway Self-Healing & Background Auto-Starter:**
   - Checks network connectivity upon startup.
-  - Automatically detects whether the OmniRoute local gateway is running; if not, starts `npx omniroute serve` in the background and verifies port 20128 readiness.
+  - Automatically detects whether the local gateway is running; if not, starts the gateway in the background and verifies connection readiness.
 
-- **🔑 Google AI Studio (Gemini API Key) Auto-Manager (`--key` / Menu `K`):**
-  - Built-in guidance to acquire free Gemini API keys from [Google AI Studio](https://aistudio.google.com/app/apikey).
-  - Automatically synchronizes new keys across `.env` and OmniRoute's SQLite database (`provider_connections`), testing connections instantly.
+- **🔑 AI Engine Credentials Auto-Manager (`--key` / Menu `K`):**
+  - Built-in guidance to configure and refresh model credentials.
+  - Automatically synchronizes keys across `.env` and local gateway configuration, testing connections instantly.
 
 - **🖥️ Dedicated Model Terminals per Repository (`launchers/run_<RepoName>.bat`):**
   - Automatically generates an isolated 1-click terminal launcher for every cloned repository.
@@ -51,7 +51,8 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
 
 - **🚀 Autonomous GitHub Publisher & Secret Sanitizer (`publish`):**
   - Autonomously prepares and publishes local projects to GitHub safely and securely.
-  - **Secret Sanitization:** Pre-flight scanner scans code for sensitive credentials (OpenAI/OmniRoute, GitHub PAT, Google/Gemini, AWS, and hardcoded tokens).
+  - **Secret Sanitization:** Pre-flight scanner scans code for sensitive credentials (API keys, personal access tokens, cloud secrets, and hardcoded tokens).
+  - **Zero-Exposure Policy:** Enforces strict sanitization on all published repositories—ensuring repository descriptions, generated documentation, and image assets contain ZERO mentions of token sources, API key providers, or credential acquisition portals.
   - **Auto-Documentation:** Verifies and auto-generates strict `.gitignore`, `.env.example` (with scrubbed values), `LICENSE` (MIT), and `README.md`.
   - **Pre-Commit Staged Diff Audit:** Verifies the staged git diff before committing; automatically aborts commit and push if any secrets are detected.
   - **Interactive Confirmation & Visibility:** Explicitly asks for permission and visibility (`public` or `private`).
@@ -70,7 +71,7 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
 ### 1. Prerequisites
 - Python 3.10+
 - Git installed on your system
-- An OpenAI-compatible LLM Gateway (e.g., [OmniRoute](https://github.com/omniroute) on `http://127.0.0.1:20128/v1` or any direct OpenAI endpoint)
+- An OpenAI-compatible LLM Gateway or standard inference endpoint
 
 ### 2. Installation
 ```powershell
@@ -87,7 +88,7 @@ Copy the sample environment file:
 ```powershell
 cp .env.example .env
 ```
-*(Optionally adjust `OMNIROUTE_BASE_URL` or `OMNIROUTE_MODEL` inside `.env`)*
+*(Optionally adjust gateway URL or model settings inside `.env`)*
 
 ---
 
@@ -100,23 +101,21 @@ Double-click `run_bot.bat`. A central interactive hub will open:
 🤖 GitHub Autonomous Agent - Central Repository Hub
 ===================================================================
 [Network]   🌐 Connected (Internet Active)
-[OmniRoute] 🚀 Gateway Active (127.0.0.1:20128)
-
-📁 Managed Repository Terminals (Dropdown List):
-  [1] 📦 Vibe-Trading        -> launchers\run_Vibe-Trading.bat
-  [2] 📦 CalculatorApp        -> launchers\run_CalculatorApp.bat
-  [3] 📦 Hello-World          -> launchers\run_Hello-World.bat
+[Engine]    🚀 Gateway Active
+-------------------------------------------------------------------
+📁 Repositories: 3 repositories ready (type 'dropdown' or 'D' to view)
 
 ⚙️ Actions & Management:
+  [D] 📁 Show Dropdown List (View all repository terminals)
   [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)
   [P] 🚀 Publish Local Project to GitHub
-  [K] 🔑 Setup / Update Gemini API Key (Google AI Studio)
+  [K] 🔑 Setup / Update AI Engine Credentials
   [H] 📜 View Full Activity & Commit History
   [U] 🧹 Uninstall a Repository
   [Q] ❌ Exit
 ===================================================================
 ```
-Simply choose a number `1-3` to jump into that project's terminal, or type `K` to update your API key!
+Simply choose a number `1-3` to jump into that project's terminal, or type `K` to update your engine credentials!
 
 ### Option 2: Dedicated Per-Repository Launchers
 Inside the `launchers/` directory:
@@ -131,7 +130,7 @@ python repo_bot_fixed.py
 # Directly open a dedicated repository
 python repo_bot_fixed.py Spoon-Knife
 
-# Setup or update Gemini API key
+# Setup or update AI engine credentials
 python repo_bot_fixed.py --key
 
 # Check activity, commit history, and terminal launchers
