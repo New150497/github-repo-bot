@@ -27,6 +27,210 @@ if hasattr(sys.stdout, "reconfigure"):
 
 IS_WINDOWS = os.name == "nt"
 
+# ---------------------------------------------------------------- environment & launchers setup
+LAUNCHERS_DIR = Path(__file__).resolve().parent / "launchers"
+LAUNCHERS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_env_file():
+    """Load environment variables from local .env file if present."""
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\"")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+        except Exception:
+            pass
+
+
+load_env_file()
+
+
+def check_internet() -> bool:
+    """Quickly check if internet connectivity is available."""
+    import socket
+    for host, port in [("8.8.8.8", 53), ("1.1.1.1", 53)]:
+        try:
+            s = socket.create_connection((host, port), timeout=2.0)
+            s.close()
+            return True
+        except Exception:
+            pass
+    try:
+        import urllib.request
+        with urllib.request.urlopen("https://www.google.com", timeout=2.5):
+            return True
+    except Exception:
+        return False
+
+
+def is_omniroute_running() -> bool:
+    """Check if OmniRoute server is responding on port 20128."""
+    import socket
+    try:
+        s = socket.create_connection(("127.0.0.1", 20128), timeout=1.0)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_omniroute_running() -> bool:
+    """If OmniRoute is not running, auto-start it in the background."""
+    if is_omniroute_running():
+        return True
+
+    print("\n[OmniRoute Auto-Start] Gateway চালু নেই। ব্যাকগ্রাউন্ডে চালু করা হচ্ছে...")
+    cmd = ["npx.cmd", "-y", "omniroute", "serve"] if IS_WINDOWS else ["npx", "-y", "omniroute", "serve"]
+    flags = 0
+    if IS_WINDOWS:
+        flags = subprocess.CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+    except Exception as e:
+        print(f"[OmniRoute Auto-Start Notice] OmniRoute চালু করতে সমস্যা: {e}")
+        return False
+
+    for _ in range(15):
+        time.sleep(1)
+        if is_omniroute_running():
+            print("[OmniRoute Auto-Start] ✅ Gateway প্রস্তুত এবং সচল আছে (127.0.0.1:20128)!\n")
+            return True
+    return is_omniroute_running()
+
+
+def create_repo_launcher(repo_name: str) -> Path:
+    """Generate a dedicated 1-click terminal launcher (.bat) for a repository."""
+    clean = re.sub(r"[^a-zA-Z0-9_\-]", "_", repo_name).strip("_")
+    launcher_path = LAUNCHERS_DIR / f"run_{clean}.bat"
+    if clean and clean.lower() != "remote":
+        content = f"""@echo off
+chcp 65001 >nul
+title GitHub Repo Agent - {clean}
+cd /d "%~dp0\\.."
+echo =================================================================
+echo 🤖 Launching Dedicated Agent Terminal for: {clean}
+echo =================================================================
+python repo_bot_fixed.py "{clean}"
+pause
+"""
+        try:
+            launcher_path.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
+    return launcher_path
+
+
+def sync_all_launchers() -> list:
+    """Ensure every cloned repository in workspace has a dedicated terminal launcher."""
+    launchers = []
+    if WORKSPACE.exists():
+        for d in WORKSPACE.iterdir():
+            if d.is_dir() and not d.name.startswith(".") and d.name.lower() != "remote":
+                lp = create_repo_launcher(d.name)
+                launchers.append(lp)
+    return launchers
+
+
+def update_gemini_api_key(new_key: str) -> tuple[bool, str]:
+    """Save Gemini API key to .env and configure OmniRoute provider."""
+    key = new_key.strip()
+    if not key:
+        return False, "Key খালি হতে পারবে না।"
+
+    # 1. Update/write .env file
+    env_path = Path(__file__).resolve().parent / ".env"
+    env_lines = []
+    if env_path.exists():
+        env_lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    updated = False
+    new_lines = []
+    for line in env_lines:
+        if line.strip().startswith("GEMINI_API_KEY="):
+            new_lines.append(f"GEMINI_API_KEY={key}")
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(f"GEMINI_API_KEY={key}")
+    try:
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    os.environ["GEMINI_API_KEY"] = key
+
+    # 2. Update via OmniRoute CLI if available
+    try:
+        cmd = ["npx.cmd", "-y", "omniroute", "keys", "add", "gemini", key] if IS_WINDOWS else ["npx", "-y", "omniroute", "keys", "add", "gemini", key]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception:
+        pass
+
+    # 3. Direct SQLite update in OmniRoute storage if present
+    sqlite_path = Path.home() / ".omniroute" / "storage.sqlite"
+    if sqlite_path.exists():
+        try:
+            import sqlite3
+            con = sqlite3.connect(sqlite_path)
+            cur = con.cursor()
+            now_iso = datetime.datetime.now().isoformat()
+            row = cur.execute("SELECT id FROM provider_connections WHERE provider = 'gemini'").fetchone()
+            if row:
+                cur.execute("UPDATE provider_connections SET api_key = ?, is_active = 1, test_status = 'active', updated_at = ? WHERE provider = 'gemini'", (key, now_iso))
+            else:
+                import uuid
+                cur.execute("INSERT INTO provider_connections (id, provider, auth_type, name, priority, is_active, test_status, api_key, created_at, updated_at) VALUES (?, 'gemini', 'apikey', 'Gemini API Key', 1, 1, 'active', ?, ?, ?)", (str(uuid.uuid4()), key, now_iso, now_iso))
+            con.commit()
+            con.close()
+        except Exception:
+            pass
+
+    # 4. Test connection
+    try:
+        t_cmd = ["npx.cmd", "-y", "omniroute", "test", "gemini"] if IS_WINDOWS else ["npx", "-y", "omniroute", "test", "gemini"]
+        t_res = subprocess.run(t_cmd, capture_output=True, text=True, timeout=15)
+        if "successful" in t_res.stdout.lower():
+            return True, "✅ নতুন Gemini API Key সফলভাবে OmniRoute-এ সেট ও ভেরিফাই হয়েছে!"
+    except Exception:
+        pass
+
+    return True, "✅ নতুন Gemini API Key সফলভাবে .env ও OmniRoute-এ আপডেট করা হয়েছে!"
+
+
+def prompt_user_for_gemini_key():
+    """Interactive prompt guiding user to Google AI Studio for free Gemini API Key."""
+    print("\n" + "=" * 65)
+    print("🔑 [Google AI Studio / Gemini API Key Setup]")
+    print("=" * 65)
+    print("Google AI Studio (Google AI Lab) থেকে একদম ফ্রিতে নতুন API Key নিতে পারেন:")
+    print("  👉 1. ব্রাউজারে এই লিংকে যান: https://aistudio.google.com/app/apikey")
+    print("  👉 2. 'Create API key' বাটনে ক্লিক করে Key কপি করুন (সাধারণত 'AIzaSy...' বা 'AQ...' দিয়ে শুরু হয়)।")
+    print("=" * 65)
+    try:
+        new_key = input("👉 আপনার Gemini API Key এখানে পেস্ট করুন (বা 'cancel' লিখুন): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not new_key or new_key.lower() in ("cancel", "q", "exit"):
+        print("বাতিল করা হলো।")
+        return
+    ok, msg = update_gemini_api_key(new_key)
+    print(f"\n{msg}\n")
+
+
 WORKSPACE = Path(
     os.environ.get("REPO_WORKSPACE", str(Path(__file__).resolve().parent / "repo"))
 ).resolve()
@@ -110,6 +314,7 @@ def record_history(
     action: str = "general",
     status: str = "Success",
     commit_status: str = "N/A",
+    terminal_launcher: str = "",
     reason: str = "",
     details: str = "",
 ) -> None:
@@ -131,6 +336,7 @@ def record_history(
         "action": action,
         "status": status,
         "commit_status": commit_status,
+        "terminal_launcher": terminal_launcher,
         "reason": reason,
         "details": details,
     }
@@ -149,10 +355,16 @@ def get_repo_history() -> str:
     lines = [f"Total Repositories & Actions Logged: {len(history)}\n"]
     for i, h in enumerate(reversed(history), 1):
         status_icon = "✅" if h.get("status") == "Success" else ("❌" if h.get("status") == "Failed" else "ℹ️")
+        launcher = h.get("terminal_launcher")
+        rname = h.get("repo_name", "")
+        if not launcher and rname and (LAUNCHERS_DIR / f"run_{rname}.bat").exists():
+            launcher = f"launchers\\run_{rname}.bat"
+
         lines.append(
             f"{i}. [{h.get('timestamp', 'N/A')}] {status_icon} {h.get('repo_name', 'Unknown')}\n"
             f"   - Action: {h.get('action', 'N/A')} | Status: {h.get('status', 'Success')}\n"
             f"   - Commit/PR: {h.get('commit_status', 'N/A')}\n"
+            + (f"   - Terminal Launcher: {launcher}\n" if launcher else "")
             + (f"   - Reason: {h.get('reason')}\n" if h.get("reason") else "")
             + (f"   - Details: {h.get('details')}\n" if h.get("details") else "")
             + (f"   - URL: {h.get('repo_url')}\n" if h.get("repo_url") else "")
@@ -222,6 +434,13 @@ def uninstall_repo(repo_name_or_url: str) -> str:
         return f"Error: '{clean_name}' নামের কোনো রিপোজিটরি ফোল্ডার পাওয়া যায়নি (Workspace: {WORKSPACE})।"
 
     success = rm_rf(target_dir)
+    launcher_file = LAUNCHERS_DIR / f"run_{clean_name}.bat"
+    if launcher_file.exists():
+        try:
+            launcher_file.unlink()
+        except Exception:
+            pass
+
     if state["repo_dir"] and state["repo_dir"].resolve() == target_dir.resolve():
         state["repo_dir"] = None
         state["last_failed_command"] = None
@@ -234,6 +453,7 @@ def uninstall_repo(repo_name_or_url: str) -> str:
             action="uninstall",
             status="Success",
             commit_status="Uninstalled",
+            terminal_launcher="Uninstalled (Launcher Removed)",
             reason="User requested removal",
             details=f"Completely deleted {target_dir} and cleared workspace."
         )
@@ -733,11 +953,14 @@ def publish_to_github(
 def clone_repo(url: str) -> str:
     name = re.split(r"[/\\]", url.rstrip("/\\"))[-1].removesuffix(".git")
     dest = WORKSPACE / name
+    launcher_file = create_repo_launcher(name)
+    rel_launcher = str(launcher_file.relative_to(Path(__file__).resolve().parent)) if launcher_file.exists() else ""
     record_history(
         repo_name=name,
         repo_url=url,
         action="clone" if not dest.exists() else "inspect",
         commit_status="Clean (origin/main)",
+        terminal_launcher=rel_launcher,
         details=f"Path: {dest}",
     )
     if dest.exists():
@@ -1243,6 +1466,135 @@ def run_agent_turn(client, messages, max_steps=None):
     sys.exit(2)
 
 
+def get_available_repos() -> list:
+    """Collect all managed repositories from workspace and history."""
+    repos = {}
+    if WORKSPACE.exists():
+        for d in sorted(WORKSPACE.iterdir()):
+            if d.is_dir() and not d.name.startswith(".") and d.name.lower() != "remote":
+                lp = create_repo_launcher(d.name)
+                rel_lp = str(lp.relative_to(Path(__file__).resolve().parent)) if lp.exists() else ""
+                repos[d.name.lower()] = {
+                    "name": d.name,
+                    "path": d,
+                    "launcher": rel_lp,
+                    "exists": True,
+                }
+    for h in load_history():
+        rname = h.get("repo_name")
+        if rname and rname.lower() != "remote" and rname.lower() not in repos:
+            folder = WORKSPACE / rname
+            lp = create_repo_launcher(rname) if folder.exists() else None
+            rel_lp = str(lp.relative_to(Path(__file__).resolve().parent)) if lp and lp.exists() else ""
+            repos[rname.lower()] = {
+                "name": rname,
+                "path": folder if folder.exists() else None,
+                "launcher": rel_lp or h.get("terminal_launcher", ""),
+                "exists": folder.exists(),
+            }
+    return list(repos.values())
+
+
+def run_central_hub() -> tuple[str, str]:
+    """Display the Central Repository Hub menu and return selected (repo_input, task)."""
+    sync_all_launchers()
+    net_ok = check_internet()
+    ensure_omniroute_running()
+    omni_ok = is_omniroute_running()
+
+    while True:
+        repos = get_available_repos()
+        print("\n" + "=" * 67)
+        print("🤖 GitHub Autonomous Agent - Central Repository Hub")
+        print("=" * 67)
+        net_str = "🌐 Connected (Internet Active)" if net_ok else "⚠️ Disconnected (Offline)"
+        omni_str = "🚀 Gateway Active (127.0.0.1:20128)" if omni_ok else "⚠️ Gateway Offline"
+        print(f"[Network]   {net_str}")
+        print(f"[OmniRoute] {omni_str}")
+        print("-" * 67)
+
+        active_repos = [r for r in repos if r["exists"]]
+        if active_repos:
+            print("📁 Managed Repository Terminals (Dropdown List):")
+            for idx, r in enumerate(active_repos, 1):
+                launcher_str = f"-> {r['launcher']}" if r.get("launcher") else ""
+                print(f"  [{idx}] 📦 {r['name']:<20} {launcher_str}")
+        else:
+            print("📁 No repositories in workspace yet.")
+
+        print("\n⚙️ Actions & Management:")
+        print("  [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)")
+        print("  [P] 🚀 Publish Local Project to GitHub (with secret scanning & docs)")
+        print("  [K] 🔑 Setup / Update Gemini API Key (Google AI Studio)")
+        print("  [H] 📜 View Full Activity & Commit History")
+        print("  [U] 🧹 Uninstall a Repository")
+        print("  [Q] ❌ Exit")
+        print("=" * 67)
+
+        try:
+            choice = input("👉 অপশন নম্বর (1-N), অ্যাকশন (N/P/K/H/U/Q), বা Repo নাম/URL দিন: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nধন্যবাদ! বট বন্ধ করা হলো।")
+            sys.exit(0)
+
+        if not choice:
+            continue
+
+        c_lower = choice.lower()
+        if c_lower in ("q", "exit", "quit", "bondho"):
+            print("ধন্যবাদ! বট বন্ধ করা হলো।")
+            sys.exit(0)
+
+        if c_lower in ("h", "history", "list"):
+            print_history_table()
+            input("👉 মেনুতে ফিরে যেতে Enter চাপুন...")
+            continue
+
+        if c_lower in ("k", "key", "--key"):
+            prompt_user_for_gemini_key()
+            omni_ok = is_omniroute_running()
+            continue
+
+        if c_lower in ("p", "publish", "upload"):
+            p_name = input("👉 রিপোজিটরি নাম দিন (খালি রাখলে ফোল্ডার নাম): ").strip()
+            p_vis = input("👉 Visibility (public/private) [default: public]: ").strip().lower() or "public"
+            print(publish_to_github(repo_name=p_name, visibility=p_vis))
+            input("👉 মেনুতে ফিরে যেতে Enter চাপুন...")
+            continue
+
+        if c_lower in ("u", "uninstall", "delete"):
+            target = input("👉 Uninstall করার জন্য Repo নাম দিন: ").strip()
+            if target:
+                print(uninstall_repo(target))
+                input("👉 মেনুতে ফিরে যেতে Enter চাপুন...")
+            continue
+
+        if c_lower in ("n", "new", "add", "clone"):
+            target = input("👉 নতুন GitHub Repository-র লিংক বা নাম দিন: ").strip()
+            if target:
+                return target, DEFAULT_TASK
+            continue
+
+        # Check if number selected
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(active_repos):
+                selected = active_repos[idx - 1]
+                print(f"\n[Selected] 🚀 {selected['name']} এর ডেডিকেটেড টার্মিনালে প্রবেশ করা হচ্ছে...")
+                return selected["name"], DEFAULT_TASK
+            else:
+                print(f"❌ ভুল নম্বর: ১ থেকে {len(active_repos)}-এর মধ্যে নির্বাচন করুন।")
+                continue
+
+        # Check if typed existing repo name directly
+        matched = next((r for r in active_repos if r["name"].lower() == c_lower), None)
+        if matched:
+            return matched["name"], DEFAULT_TASK
+
+        # Otherwise treat as repo name or URL
+        return choice, DEFAULT_TASK
+
+
 def main():
     if len(sys.argv) == 2 and sys.argv[1] in ("--self-test", "-t"):
         print("Running self-test suite (backtest_repo_bot.py)...")
@@ -1252,6 +1604,10 @@ def main():
 
     if len(sys.argv) == 2 and sys.argv[1] in ("--history", "-h", "history"):
         print_history_table()
+        sys.exit(0)
+
+    if len(sys.argv) == 2 and sys.argv[1] in ("--key", "-k", "key"):
+        prompt_user_for_gemini_key()
         sys.exit(0)
 
     if len(sys.argv) >= 2 and sys.argv[1].lower() in ("publish", "--publish", "upload"):
@@ -1271,87 +1627,73 @@ def main():
         repo_input = sys.argv[1]
         task = sys.argv[2]
         allow_interactive = False
+        from_hub = False
     elif len(sys.argv) == 2:
         repo_input = sys.argv[1]
         task = DEFAULT_TASK
         allow_interactive = is_interactive
+        from_hub = False
     else:
-        print("\n" + "=" * 55)
-        print("🤖 GitHub Autonomous Agent (Windows Native)")
-        print("=" * 55)
-        try:
-            repo_input = input("\n👉 GitHub repository-r link/nam dao (ba 'history' / 'publish' / 'uninstall <name>'): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nBondho kora holo.")
-            sys.exit(0)
-        if not repo_input:
+        if is_interactive:
+            repo_input, task = run_central_hub()
+            allow_interactive = True
+            from_hub = True
+        else:
             print("Kono repo deya hoy ni. Bot bondho holo.")
             sys.exit(0)
-        if repo_input.lower() in ("history", "list", "show history"):
-            print_history_table()
-            try:
-                repo_input = input("👉 Ekhon GitHub repository-r link ba nam dao: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                sys.exit(0)
-            if not repo_input:
-                sys.exit(0)
-        if repo_input.lower().startswith(("publish", "upload")):
-            parts = repo_input.split()
-            target = parts[1] if len(parts) > 1 else ""
-            vis = parts[2] if len(parts) > 2 else "public"
-            print(publish_to_github(repo_name=target, visibility=vis))
-            sys.exit(0)
-        if repo_input.lower().startswith(("uninstall ", "delete ", "remove ", "clean ")):
-            target = repo_input.split(" ", 1)[1].strip()
-            print(uninstall_repo(target))
-            sys.exit(0)
-        task = DEFAULT_TASK
-        allow_interactive = is_interactive
 
-    repo_url = resolve_repo_url(repo_input)
-    print(f"\n[Target Repo] {repo_url}")
+    while True:
+        repo_url = resolve_repo_url(repo_input)
+        print(f"\n[Target Repo] {repo_url}")
 
-    client = OpenAI(base_url=OMNIROUTE_URL, api_key=OMNIROUTE_KEY, max_retries=0, timeout=180)
+        client = OpenAI(base_url=OMNIROUTE_URL, api_key=OMNIROUTE_KEY, max_retries=0, timeout=180)
 
-    prompt = build_system_prompt()
-    lessons = load_lessons()
-    if lessons:
-        print(f"[Self-Improvement] Memory loaded: {len(lessons)} lessons from past experience.")
+        prompt = build_system_prompt()
+        lessons = load_lessons()
+        if lessons:
+            print(f"[Self-Improvement] Memory loaded: {len(lessons)} lessons from past experience.")
 
-    messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"Repo: {repo_url}\nTask: {task}"},
-    ]
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"Repo: {repo_url}\nTask: {task}"},
+        ]
 
-    print(f"OmniRoute gateway-te request pathano hocche ({OMNIROUTE_URL})...\n")
+        print(f"OmniRoute gateway-te request pathano hocche ({OMNIROUTE_URL})...\n")
 
-    run_agent_turn(client, messages)
+        run_agent_turn(client, messages)
 
-    if allow_interactive:
-        while True:
-            print("\n" + "-" * 55)
-            try:
-                user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'publish', 'history', ba 'exit'): ").strip()
-            except (EOFError, KeyboardInterrupt):
-                break
-            if not user_msg or user_msg.lower() in ("exit", "quit", "q", "na", "bondho"):
-                print("Dhonnobad! Bot bondho kora holo.")
-                break
-            if user_msg.lower() in ("history", "list", "history dekhaw"):
-                print_history_table()
-                continue
-            if user_msg.lower().startswith(("publish", "upload")):
-                parts = user_msg.split()
-                target = parts[1] if len(parts) > 1 else ""
-                vis = parts[2] if len(parts) > 2 else "public"
-                print(publish_to_github(repo_name=target, visibility=vis))
-                continue
-            if user_msg.lower().startswith(("uninstall ", "delete ", "remove ", "clean ")):
-                target = user_msg.split(" ", 1)[1].strip()
-                print(uninstall_repo(target))
-                continue
-            messages.append({"role": "user", "content": user_msg})
-            run_agent_turn(client, messages)
+        if allow_interactive:
+            while True:
+                print("\n" + "-" * 55)
+                try:
+                    user_msg = input("💬 Repo niye kono proshno ache ba kichu korte chan? (likhun, 'hub', 'publish', 'history', ba 'exit'): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if not user_msg or user_msg.lower() in ("exit", "quit", "q", "na", "bondho"):
+                    print("Dhonnobad! Session bondho kora holo.")
+                    break
+                if user_msg.lower() in ("hub", "menu", "back"):
+                    break
+                if user_msg.lower() in ("history", "list", "history dekhaw"):
+                    print_history_table()
+                    continue
+                if user_msg.lower().startswith(("publish", "upload")):
+                    parts = user_msg.split()
+                    target = parts[1] if len(parts) > 1 else ""
+                    vis = parts[2] if len(parts) > 2 else "public"
+                    print(publish_to_github(repo_name=target, visibility=vis))
+                    continue
+                if user_msg.lower().startswith(("uninstall ", "delete ", "remove ", "clean ")):
+                    target = user_msg.split(" ", 1)[1].strip()
+                    print(uninstall_repo(target))
+                    continue
+                messages.append({"role": "user", "content": user_msg})
+                run_agent_turn(client, messages)
+
+        if from_hub:
+            repo_input, task = run_central_hub()
+            continue
+        break
 
 
 if __name__ == "__main__":

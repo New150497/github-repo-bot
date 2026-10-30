@@ -31,7 +31,23 @@ An autonomous, secure, and self-improving AI coding agent built for Windows & Li
 
 - **📜 Activity & Commit History Register:**
   - Maintains a persistent record of all handled repositories, commit states, pull request requirements, and uninstalls.
+  - Automatically records and shows the dedicated terminal launcher path for each repository.
   - Accessible directly in chat or via `--history`.
+
+- **🌐 OmniRoute Gateway Self-Healing & Background Auto-Starter:**
+  - Checks network connectivity upon startup.
+  - Automatically detects whether the OmniRoute local gateway is running; if not, starts `npx omniroute serve` in the background and verifies port 20128 readiness.
+
+- **🔑 Google AI Studio (Gemini API Key) Auto-Manager (`--key` / Menu `K`):**
+  - Built-in guidance to acquire free Gemini API keys from [Google AI Studio](https://aistudio.google.com/app/apikey).
+  - Automatically synchronizes new keys across `.env` and OmniRoute's SQLite database (`provider_connections`), testing connections instantly.
+
+- **🖥️ Dedicated Model Terminals per Repository (`launchers/run_<RepoName>.bat`):**
+  - Automatically generates an isolated 1-click terminal launcher for every cloned repository.
+  - Launching `run_<RepoName>.bat` opens an interactive session focused specifically on that project.
+
+- **🎛️ Central Repository Hub (`run_bot.bat`):**
+  - Interactive numbered dropdown menu to quickly select and launch any repository, clone new projects, manage API keys, view history, or publish to GitHub.
 
 - **🚀 Autonomous GitHub Publisher & Secret Sanitizer (`publish`):**
   - Autonomously prepares and publishes local projects to GitHub safely and securely.
@@ -77,28 +93,51 @@ cp .env.example .env
 
 ## 💻 Usage
 
-### Option 1: Double-Click Launcher (Windows)
-Double-click `run_bot.bat`. A terminal window will open and prompt you:
+### Option 1: Central Repository Hub (Double-Click)
+Double-click `run_bot.bat`. A central interactive hub will open:
 ```text
-👉 GitHub repository-r link/nam dao (ba 'history' / 'uninstall <name>'):
-```
-Simply type the repository name or paste a URL and press **Enter**!
+===================================================================
+🤖 GitHub Autonomous Agent - Central Repository Hub
+===================================================================
+[Network]   🌐 Connected (Internet Active)
+[OmniRoute] 🚀 Gateway Active (127.0.0.1:20128)
 
-### Option 2: Command Line
+📁 Managed Repository Terminals (Dropdown List):
+  [1] 📦 Vibe-Trading        -> launchers\run_Vibe-Trading.bat
+  [2] 📦 CalculatorApp        -> launchers\run_CalculatorApp.bat
+  [3] 📦 Hello-World          -> launchers\run_Hello-World.bat
+
+⚙️ Actions & Management:
+  [N] ➕ Add / Clone New Repo (Auto-creates dedicated terminal)
+  [P] 🚀 Publish Local Project to GitHub
+  [K] 🔑 Setup / Update Gemini API Key (Google AI Studio)
+  [H] 📜 View Full Activity & Commit History
+  [U] 🧹 Uninstall a Repository
+  [Q] ❌ Exit
+===================================================================
+```
+Simply choose a number `1-3` to jump into that project's terminal, or type `K` to update your API key!
+
+### Option 2: Dedicated Per-Repository Launchers
+Inside the `launchers/` directory:
+- Double-click `run_Vibe-Trading.bat` -> Immediately launches an interactive agent terminal for `Vibe-Trading`.
+- Double-click `run_CalculatorApp.bat` -> Opens an isolated session for `CalculatorApp`.
+
+### Option 3: Command Line
 ```powershell
-# Interactive mode (prompts for repository name)
+# Central Hub mode
 python repo_bot_fixed.py
 
-# Analyze a repo with automatic discovery
+# Directly open a dedicated repository
 python repo_bot_fixed.py Spoon-Knife
 
-# Custom task execution
-python repo_bot_fixed.py https://github.com/HKUDS/Vibe-Trading "README.md pore architecture summary dao"
+# Setup or update Gemini API key
+python repo_bot_fixed.py --key
 
-# Check activity and commit history register
+# Check activity, commit history, and terminal launchers
 python repo_bot_fixed.py --history
 
-# Safely publish a local project to GitHub (with secret scanning & docs)
+# Safely publish a local project to GitHub
 python repo_bot_fixed.py publish my-project public
 
 # Uninstall a repository and clean workspace
@@ -116,7 +155,11 @@ python repo_bot_fixed.py --self-test
 github-repo-bot/
 ├── repo_bot_fixed.py      # Core autonomous agent & tool orchestrator
 ├── backtest_repo_bot.py    # 24-check offline verification test suite
-├── run_bot.bat             # 1-click Windows launcher
+├── run_bot.bat             # Central Repository Hub launcher
+├── launchers/              # Dedicated 1-click terminal launchers per repository
+│   ├── run_Vibe-Trading.bat
+│   ├── run_CalculatorApp.bat
+│   └── run_Hello-World.bat
 ├── .env.example            # Configuration template
 ├── .gitignore              # Strict ignore rules for safety & clean git state
 ├── LICENSE                 # MIT License
