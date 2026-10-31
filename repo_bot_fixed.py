@@ -81,6 +81,27 @@ def is_omniroute_running() -> bool:
         return False
 
 
+def find_npx() -> tuple[str, dict]:
+    """Find npx executable on Windows / Linux and return (npx_path, env)."""
+    which_npx = shutil.which("npx.cmd") or shutil.which("npx")
+    env = os.environ.copy()
+    if which_npx:
+        return which_npx, env
+
+    candidate_dirs = [
+        Path(os.path.expanduser(r"~\AppData\Local\hermes\node")),
+        Path(r"C:\Program Files\nodejs"),
+        Path(os.path.expanduser(r"~\AppData\Roaming\npm")),
+    ]
+    for d in candidate_dirs:
+        npx_file = d / ("npx.cmd" if IS_WINDOWS else "npx")
+        if npx_file.exists():
+            env["PATH"] = str(d) + os.pathsep + env.get("PATH", "")
+            return str(npx_file), env
+
+    return ("npx.cmd" if IS_WINDOWS else "npx"), env
+
+
 def ensure_omniroute_running() -> bool:
     """If OmniRoute is not running, auto-start it in the background."""
     if "botbacktest" in str(WORKSPACE) or os.environ.get("GITHUB_TOKEN") == "SECRET_GH_TOKEN_123":
@@ -90,7 +111,8 @@ def ensure_omniroute_running() -> bool:
         return True
 
     print("\n[OmniRoute Auto-Start] Gateway চালু নেই। বট স্বয়ংক্রিয়ভাবে ব্যাকগ্রাউন্ডে চালু করছে...")
-    cmd = ["npx.cmd", "-y", "omniroute", "serve"] if IS_WINDOWS else ["npx", "-y", "omniroute", "serve"]
+    npx_bin, sub_env = find_npx()
+    cmd = [npx_bin, "-y", "omniroute", "serve"]
     flags = 0
     if IS_WINDOWS:
         flags = subprocess.CREATE_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
@@ -98,6 +120,7 @@ def ensure_omniroute_running() -> bool:
     try:
         subprocess.Popen(
             cmd,
+            env=sub_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -107,7 +130,7 @@ def ensure_omniroute_running() -> bool:
         print(f"[OmniRoute Auto-Start Notice] OmniRoute চালু করতে সমস্যা: {e}")
         return False
 
-    for _ in range(15):
+    for _ in range(20):
         time.sleep(1)
         if is_omniroute_running():
             print("[OmniRoute Auto-Start] ✅ Gateway প্রস্তুত এবং সচল আছে (127.0.0.1:20128)!\n")

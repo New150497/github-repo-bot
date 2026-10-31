@@ -192,31 +192,50 @@ def check_auth(user_id: int, chat_id: int) -> bool:
     return False
 
 
+def launch_pc_terminal(repo_name: str = None) -> bool:
+    """Pop open an interactive terminal window directly on the PC desktop."""
+    try:
+        if sys.platform == "win32":
+            if repo_name and (BASE_DIR / "launchers" / f"run_{repo_name}.bat").exists():
+                bat_file = BASE_DIR / "launchers" / f"run_{repo_name}.bat"
+                subprocess.Popen(f'start "{repo_name} Agent" cmd /k "{str(bat_file)}"', shell=True, cwd=str(BASE_DIR))
+            else:
+                bat_file = BASE_DIR / "run_bot.bat"
+                subprocess.Popen(f'start "GitHub Autonomous Agent Hub" cmd /k "{str(bat_file)}"', shell=True, cwd=str(BASE_DIR))
+            return True
+    except Exception as e:
+        print(f"[Launch Terminal Error] {e}")
+    return False
+
+
 def build_dashboard_keyboard() -> dict:
     """Build the interactive main menu inline keyboard."""
     return {
         "inline_keyboard": [
             [
+                {"text": "🖥️ Open PC Terminal", "callback_data": "menu:open_terminal"},
                 {"text": "📦 Select Repo", "callback_data": "menu:repos"},
+            ],
+            [
                 {"text": "➕ Clone Repo", "callback_data": "menu:clone"},
-            ],
-            [
                 {"text": "📊 System Status", "callback_data": "menu:status"},
+            ],
+            [
                 {"text": "📜 Activity History", "callback_data": "menu:history"},
-            ],
-            [
                 {"text": "🚀 Publish to GitHub", "callback_data": "menu:publish"},
-                {"text": "🔑 Engine Key", "callback_data": "menu:key"},
             ],
             [
+                {"text": "🔑 Engine Key", "callback_data": "menu:key"},
                 {"text": "🧹 Uninstall Repo", "callback_data": "menu:uninstall"},
+            ],
+            [
                 {"text": "❓ Help & Guide", "callback_data": "menu:help"},
             ],
         ]
     }
 
 
-def send_dashboard(chat_id: int):
+def send_dashboard(chat_id: int, open_terminal: bool = False):
     """Render the central status dashboard."""
     bot.ensure_omniroute_running()
     net_ok = bot.check_internet()
@@ -226,12 +245,19 @@ def send_dashboard(chat_id: int):
 
     cur_repo = tg_state["active_repo"] or (active_repos[0]["name"] if active_repos else "None")
 
+    term_status = ""
+    if open_terminal:
+        opened = launch_pc_terminal(cur_repo if cur_repo != "None" else None)
+        if opened:
+            term_status = "🖥️ <b>PC-তে Agent Terminal চালু করা হয়েছে!</b>\n"
+
     net_badge = "🌐 <b>Online (Connected)</b>" if net_ok else "⚠️ <b>Offline</b>"
     omni_badge = "🚀 <b>Active (127.0.0.1:20128)</b>" if omni_ok else "⚠️ <b>Offline</b>"
 
     text = (
         f"🤖 <b>GitHub Autonomous Agent - Remote Hub</b>\n"
         f"────────────────────────────\n"
+        f"{term_status}"
         f"[Internet]  {net_badge}\n"
         f"[AI Engine] {omni_badge}\n"
         f"[Active Repo] 📦 <b>{cur_repo}</b>\n"
@@ -588,6 +614,11 @@ def handle_callback_query(cq: dict):
         send_dashboard(chat_id)
         return
 
+    if data == "menu:open_terminal":
+        opened = launch_pc_terminal(tg_state["active_repo"])
+        send_message(chat_id, "🖥️ <b>PC-তে টার্মিনাল উইন্ডো খোলা হয়েছে!</b>" if opened else "❌ টার্মিনাল খুলতে সমস্যা হয়েছে।")
+        return
+
     if data == "menu:repos":
         handle_repos_menu(chat_id)
         return
@@ -702,8 +733,8 @@ def handle_message(msg: dict):
         cmd = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if cmd in ("/start", "/menu", "/hub"):
-            send_dashboard(chat_id)
+        if cmd in ("/start", "/menu", "/hub", "/terminal"):
+            send_dashboard(chat_id, open_terminal=True)
             return
 
         if cmd in ("/repos", "/dropdown", "/list"):
